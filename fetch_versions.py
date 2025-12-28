@@ -4,6 +4,9 @@ Fetch all repos from the GitHub actions organization and their tags via the API,
 and generate a versions.txt file with the latest vINTEGER tags.
 
 No git cloning required - uses GitHub REST API only.
+
+Repos known to have no vINTEGER tags are cached in unversioned.txt to skip
+API calls on future runs.
 """
 
 import json
@@ -15,9 +18,23 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 VERSIONS_FILE = SCRIPT_DIR / "versions.txt"
+UNVERSIONED_FILE = SCRIPT_DIR / "unversioned.txt"
 ORG_NAME = "actions"
 GITHUB_API_URL = "https://api.github.com"
-REPO_PREFIX = "setup-"  # Only include repos starting with this prefix
+
+
+def load_unversioned() -> set[str]:
+    """Load the set of repos known to have no vINTEGER tags."""
+    if not UNVERSIONED_FILE.exists():
+        return set()
+    return set(line.strip() for line in UNVERSIONED_FILE.read_text().splitlines() if line.strip())
+
+
+def save_unversioned(repos: set[str]) -> None:
+    """Save the set of repos known to have no vINTEGER tags."""
+    with open(UNVERSIONED_FILE, "w") as f:
+        for repo_name in sorted(repos):
+            f.write(f"{repo_name}\n")
 
 
 def fetch_repos(org: str) -> list[dict]:
@@ -106,18 +123,26 @@ def get_latest_version_tag(tags: list[str]) -> str | None:
 
 def main():
     """Main function to fetch repos, get tags via API, and generate versions.txt."""
+    # Load cached unversioned repos
+    unversioned = load_unversioned()
+    if unversioned:
+        print(f"Loaded {len(unversioned)} known unversioned repos from cache")
+
     print(f"Fetching repos for {ORG_NAME}...")
     repos = fetch_repos(ORG_NAME)
     print(f"Found {len(repos)} repos")
 
-    # Filter to repos matching the prefix
-    repos = [r for r in repos if r["name"].startswith(REPO_PREFIX)]
-    print(f"Filtered to {len(repos)} repos matching '{REPO_PREFIX}*'")
-
     versions = []
+    new_unversioned = set()
 
     for repo in repos:
         repo_name = repo["name"]
+
+        # Skip repos known to have no vINTEGER tags
+        if repo_name in unversioned:
+            print(f"Skipping {repo_name} (cached as unversioned)")
+            new_unversioned.add(repo_name)
+            continue
 
         print(f"Fetching tags for {repo_name}...", end=" ")
         tags = fetch_tags(ORG_NAME, repo_name)
@@ -128,6 +153,7 @@ def main():
             print(f"{latest_tag}")
         else:
             print("no vINTEGER tag")
+            new_unversioned.add(repo_name)
 
     # Sort alphabetically by repo name
     versions.sort(key=lambda x: x[0].lower())
@@ -137,7 +163,11 @@ def main():
         for repo_name, tag in versions:
             f.write(f"{ORG_NAME}/{repo_name}@{tag}\n")
 
+    # Update unversioned.txt
+    save_unversioned(new_unversioned)
+
     print(f"\nWrote {len(versions)} versions to {VERSIONS_FILE}")
+    print(f"Cached {len(new_unversioned)} unversioned repos to {UNVERSIONED_FILE}")
 
 
 if __name__ == "__main__":

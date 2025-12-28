@@ -130,6 +130,40 @@ class TestFetchTags(unittest.TestCase):
         self.assertEqual(len(tags), 0)
 
 
+class TestUnversionedCache(unittest.TestCase):
+    """Tests for the unversioned repos caching functions."""
+
+    def test_load_unversioned_file_not_exists(self):
+        """Test loading when unversioned.txt doesn't exist."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(fetch_versions, "UNVERSIONED_FILE", Path(tmpdir) / "unversioned.txt"):
+                result = fetch_versions.load_unversioned()
+                self.assertEqual(result, set())
+
+    def test_load_unversioned_with_repos(self):
+        """Test loading unversioned repos from file."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            unversioned_file = Path(tmpdir) / "unversioned.txt"
+            unversioned_file.write_text("repo1\nrepo2\nrepo3\n")
+
+            with patch.object(fetch_versions, "UNVERSIONED_FILE", unversioned_file):
+                result = fetch_versions.load_unversioned()
+                self.assertEqual(result, {"repo1", "repo2", "repo3"})
+
+    def test_save_unversioned(self):
+        """Test saving unversioned repos to file."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            unversioned_file = Path(tmpdir) / "unversioned.txt"
+
+            with patch.object(fetch_versions, "UNVERSIONED_FILE", unversioned_file):
+                fetch_versions.save_unversioned({"zebra", "alpha", "mango"})
+
+                content = unversioned_file.read_text()
+                lines = content.strip().split("\n")
+                # Should be sorted alphabetically
+                self.assertEqual(lines, ["alpha", "mango", "zebra"])
+
+
 class TestGetLatestVersionTag(unittest.TestCase):
     """Tests for the get_latest_version_tag function."""
 
@@ -166,6 +200,8 @@ class TestGetLatestVersionTag(unittest.TestCase):
 class TestMain(unittest.TestCase):
     """Integration tests for the main function."""
 
+    @patch("fetch_versions.save_unversioned")
+    @patch("fetch_versions.load_unversioned")
     @patch("fetch_versions.VERSIONS_FILE")
     @patch("fetch_versions.get_latest_version_tag")
     @patch("fetch_versions.fetch_tags")
@@ -176,6 +212,8 @@ class TestMain(unittest.TestCase):
         mock_fetch_tags,
         mock_get_tag,
         mock_versions_file,
+        mock_load_unversioned,
+        mock_save_unversioned,
     ):
         """Test the main function with mocked dependencies."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -184,12 +222,14 @@ class TestMain(unittest.TestCase):
             mock_versions_file.__str__ = lambda self: str(versions_file)
             mock_versions_file.__fspath__ = lambda self: str(versions_file)
 
-            # Mock fetch_repos to return test data (includes non-setup repos that get filtered)
+            # No cached unversioned repos
+            mock_load_unversioned.return_value = set()
+
+            # Mock fetch_repos to return test data
             mock_fetch_repos.return_value = [
                 {"name": "setup-python"},
                 {"name": "setup-node"},
-                {"name": "checkout"},  # Filtered out (doesn't start with setup-)
-                {"name": "cache"},  # Filtered out
+                {"name": "no-tags-repo"},
             ]
 
             # Mock fetch_tags to return tags for each repo
@@ -199,7 +239,7 @@ class TestMain(unittest.TestCase):
                 elif repo_name == "setup-node":
                     return ["v1", "v2", "v3", "v4"]
                 else:
-                    return ["v1", "v2"]  # These shouldn't be called due to filtering
+                    return []  # no-tags-repo has no tags
 
             mock_fetch_tags.side_effect = fetch_tags_side_effect
 
@@ -236,6 +276,61 @@ class TestMain(unittest.TestCase):
             # Verify alphabetical ordering (setup-node before setup-python)
             self.assertEqual(lines[0], "actions/setup-node@v4")
             self.assertEqual(lines[1], "actions/setup-python@v5")
+
+            # Verify unversioned repos were saved
+            mock_save_unversioned.assert_called_once()
+            saved_unversioned = mock_save_unversioned.call_args[0][0]
+            self.assertIn("no-tags-repo", saved_unversioned)
+
+    @patch("fetch_versions.save_unversioned")
+    @patch("fetch_versions.load_unversioned")
+    @patch("fetch_versions.VERSIONS_FILE")
+    @patch("fetch_versions.get_latest_version_tag")
+    @patch("fetch_versions.fetch_tags")
+    @patch("fetch_versions.fetch_repos")
+    def test_main_skips_cached_unversioned(
+        self,
+        mock_fetch_repos,
+        mock_fetch_tags,
+        mock_get_tag,
+        mock_versions_file,
+        mock_load_unversioned,
+        mock_save_unversioned,
+    ):
+        """Test that cached unversioned repos are skipped."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            versions_file = tmppath / "versions.txt"
+            mock_versions_file.__str__ = lambda self: str(versions_file)
+            mock_versions_file.__fspath__ = lambda self: str(versions_file)
+
+            # Cached unversioned repos
+            mock_load_unversioned.return_value = {"cached-no-tags"}
+
+            # Mock fetch_repos to return test data including cached repo
+            mock_fetch_repos.return_value = [
+                {"name": "setup-python"},
+                {"name": "cached-no-tags"},
+            ]
+
+            # Mock fetch_tags - should only be called for setup-python
+            mock_fetch_tags.return_value = ["v1", "v5"]
+            mock_get_tag.return_value = "v5"
+
+            # Patch open() to write to our temp file
+            original_open = open
+
+            def patched_open(path, *args, **kwargs):
+                if "versions.txt" in str(path):
+                    return original_open(versions_file, *args, **kwargs)
+                return original_open(path, *args, **kwargs)
+
+            with patch("builtins.open", side_effect=patched_open):
+                fetch_versions.main()
+
+            # fetch_tags should only be called once (for setup-python, not cached-no-tags)
+            self.assertEqual(mock_fetch_tags.call_count, 1)
+            mock_fetch_tags.assert_called_with("actions", "setup-python")
 
 
 class TestVersionPatternMatching(unittest.TestCase):
