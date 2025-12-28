@@ -184,11 +184,12 @@ class TestMain(unittest.TestCase):
             mock_versions_file.__str__ = lambda self: str(versions_file)
             mock_versions_file.__fspath__ = lambda self: str(versions_file)
 
-            # Mock fetch_repos to return test data
+            # Mock fetch_repos to return test data (includes non-setup repos that get filtered)
             mock_fetch_repos.return_value = [
                 {"name": "setup-python"},
                 {"name": "setup-node"},
-                {"name": "no-tags-repo"},
+                {"name": "checkout"},  # Filtered out (doesn't start with setup-)
+                {"name": "cache"},  # Filtered out
             ]
 
             # Mock fetch_tags to return tags for each repo
@@ -198,7 +199,7 @@ class TestMain(unittest.TestCase):
                 elif repo_name == "setup-node":
                     return ["v1", "v2", "v3", "v4"]
                 else:
-                    return []
+                    return ["v1", "v2"]  # These shouldn't be called due to filtering
 
             mock_fetch_tags.side_effect = fetch_tags_side_effect
 

@@ -17,6 +17,7 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 VERSIONS_FILE = SCRIPT_DIR / "versions.txt"
 ORG_NAME = "actions"
 GITHUB_API_URL = "https://api.github.com"
+REPO_PREFIX = "setup-"  # Only include repos starting with this prefix
 
 
 def fetch_repos(org: str) -> list[dict]:
@@ -108,6 +109,10 @@ def main():
     print(f"Fetching repos for {ORG_NAME}...")
     repos = fetch_repos(ORG_NAME)
     print(f"Found {len(repos)} repos")
+
+    # Filter to repos matching the prefix
+    repos = [r for r in repos if r["name"].startswith(REPO_PREFIX)]
+    print(f"Filtered to {len(repos)} repos matching '{REPO_PREFIX}*'")
 
     versions = []
 
