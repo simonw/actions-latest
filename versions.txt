@@ -29,6 +29,7 @@ actions/setup-java@v5
 actions/setup-node@v6
 actions/setup-python@v6
 actions/setup-ruby@v1
+actions/setup-uv@v7
 actions/stale@v10
 actions/upload-artifact@v6
 actions/upload-pages-artifact@v4
