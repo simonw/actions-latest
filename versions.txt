@@ -1,4 +1,4 @@
-actions/actions-sync@v202404231422
+actions/actions-sync@v202601271539
 actions/ai-inference@v2
 actions/attest@v3
 actions/attest-build-provenance@v3
