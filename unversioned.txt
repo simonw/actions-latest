@@ -38,6 +38,7 @@ runner-images-PK1
 runner-images-check
 runner-images-sangeeth
 runner-images-temp
+scaleset
 starter-workflows
 toolkit
 typescript-action
