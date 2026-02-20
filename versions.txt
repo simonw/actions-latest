@@ -9,7 +9,7 @@ actions/configure-pages@v5
 actions/create-github-app-token@v2
 actions/create-release@v1
 actions/delete-package-versions@v5
-actions/dependency-review-action@v4
+actions/dependency-review-action@v3
 actions/deploy-pages@v4
 actions/download-artifact@v7
 actions/first-interaction@v3
