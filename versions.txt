@@ -1,8 +1,8 @@
 actions/actions-sync@v202601271539
 actions/ai-inference@v2
 actions/attest@v4
-actions/attest-build-provenance@v3
-actions/attest-sbom@v3
+actions/attest-build-provenance@v4
+actions/attest-sbom@v4
 actions/cache@v5
 actions/checkout@v6
 actions/configure-pages@v5
