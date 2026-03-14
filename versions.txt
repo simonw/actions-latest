@@ -6,7 +6,7 @@ actions/attest-sbom@v4
 actions/cache@v5
 actions/checkout@v6
 actions/configure-pages@v5
-actions/create-github-app-token@v2
+actions/create-github-app-token@v3
 actions/create-release@v1
 actions/delete-package-versions@v5
 actions/dependency-review-action@v3
