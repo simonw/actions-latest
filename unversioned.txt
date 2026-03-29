@@ -2,8 +2,11 @@
 action-versions
 actions-runner-controller
 add-to-project
+ai-inference
 alpine_nodejs
 anno-test
+attest-build-provenance
+attest-sbom
 boost-versions
 buildtypes
 component-detection-dependency-submission-action
@@ -39,6 +42,7 @@ runner-images-check
 runner-images-sangeeth
 runner-images-temp
 scaleset
+setup-copilot
 starter-workflows
 toolkit
 typescript-action
