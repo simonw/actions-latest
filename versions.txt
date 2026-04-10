@@ -10,7 +10,7 @@ actions/dependency-review-action@v3
 actions/deploy-pages@v5
 actions/download-artifact@v8
 actions/first-interaction@v3
-actions/github-script@v8
+actions/github-script@v9
 actions/go-dependency-submission@v2
 actions/hello-world-docker-action@v2
 actions/hello-world-javascript-action@v1
