@@ -164,6 +164,64 @@ class TestUnversionedCache(unittest.TestCase):
                 self.assertEqual(lines, ["alpha", "mango", "zebra"])
 
 
+class TestUpdateReadme(unittest.TestCase):
+    """Tests for updating the README versions block."""
+
+    def test_update_readme_replaces_only_marked_section(self):
+        """Test replacing the generated block while preserving surrounding text."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            readme_file = Path(tmpdir) / "README.md"
+            readme_file.write_text(
+                "Intro text\n\n"
+                f"{fetch_versions.README_START_MARKER}\n"
+                "## Latest versions\n\n"
+                "```\n"
+                "actions/checkout@v5\n"
+                "```\n"
+                f"{fetch_versions.README_END_MARKER}\n\n"
+                "Footer text\n"
+            )
+
+            with patch.object(fetch_versions, "README_FILE", readme_file):
+                fetch_versions.update_readme(
+                    "actions/checkout@v6\n"
+                    "actions/upload-artifact@v7\n"
+                )
+
+            self.assertEqual(
+                readme_file.read_text(),
+                "Intro text\n\n"
+                f"{fetch_versions.README_START_MARKER}\n"
+                "## Latest versions\n\n"
+                "```\n"
+                "actions/checkout@v6\n"
+                "actions/upload-artifact@v7\n"
+                "```\n"
+                f"{fetch_versions.README_END_MARKER}\n\n"
+                "Footer text\n"
+            )
+
+    def test_update_readme_appends_section_when_markers_are_missing(self):
+        """Test adding the generated block to a README without markers."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            readme_file = Path(tmpdir) / "README.md"
+            readme_file.write_text("Intro text\n")
+
+            with patch.object(fetch_versions, "README_FILE", readme_file):
+                fetch_versions.update_readme("actions/checkout@v6\n")
+
+            self.assertEqual(
+                readme_file.read_text(),
+                "Intro text\n\n"
+                f"{fetch_versions.README_START_MARKER}\n"
+                "## Latest versions\n\n"
+                "```\n"
+                "actions/checkout@v6\n"
+                "```\n"
+                f"{fetch_versions.README_END_MARKER}\n"
+            )
+
+
 class TestGetLatestVersionTag(unittest.TestCase):
     """Tests for the get_latest_version_tag function."""
 
@@ -219,6 +277,11 @@ class TestMain(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
             versions_file = tmppath / "versions.txt"
+            readme_file = tmppath / "README.md"
+            readme_file.write_text(
+                f"{fetch_versions.README_START_MARKER}\n"
+                f"{fetch_versions.README_END_MARKER}\n"
+            )
             mock_versions_file.__str__ = lambda self: str(versions_file)
             mock_versions_file.__fspath__ = lambda self: str(versions_file)
 
@@ -262,7 +325,10 @@ class TestMain(unittest.TestCase):
                     return original_open(versions_file, *args, **kwargs)
                 return original_open(path, *args, **kwargs)
 
-            with patch("builtins.open", side_effect=patched_open):
+            with (
+                patch("builtins.open", side_effect=patched_open),
+                patch.object(fetch_versions, "README_FILE", readme_file),
+            ):
                 fetch_versions.main()
 
             # Verify the versions file was written correctly
@@ -301,6 +367,11 @@ class TestMain(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
             versions_file = tmppath / "versions.txt"
+            readme_file = tmppath / "README.md"
+            readme_file.write_text(
+                f"{fetch_versions.README_START_MARKER}\n"
+                f"{fetch_versions.README_END_MARKER}\n"
+            )
             mock_versions_file.__str__ = lambda self: str(versions_file)
             mock_versions_file.__fspath__ = lambda self: str(versions_file)
 
@@ -325,7 +396,10 @@ class TestMain(unittest.TestCase):
                     return original_open(versions_file, *args, **kwargs)
                 return original_open(path, *args, **kwargs)
 
-            with patch("builtins.open", side_effect=patched_open):
+            with (
+                patch("builtins.open", side_effect=patched_open),
+                patch.object(fetch_versions, "README_FILE", readme_file),
+            ):
                 fetch_versions.main()
 
             # fetch_tags should only be called once (for setup-python, not cached-no-tags)
