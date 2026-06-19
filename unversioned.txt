@@ -38,11 +38,8 @@ reusable-workflows
 runner
 runner-container-hooks
 runner-images
-runner-images-PK
 runner-images-PK1
 runner-images-check
-runner-images-sangeeth
-runner-images-temp
 scaleset
 starter-workflows
 toolkit
