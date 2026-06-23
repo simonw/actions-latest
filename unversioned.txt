@@ -5,6 +5,7 @@ add-to-project
 ai-inference
 alpine_nodejs
 anno-test
+attest
 attest-build-provenance
 attest-sbom
 boost-versions
@@ -44,5 +45,6 @@ scaleset
 starter-workflows
 toolkit
 typescript-action
+upload-code-coverage
 versions-package-tools
 virtual-environments-packages
