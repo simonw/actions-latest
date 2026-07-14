@@ -22,7 +22,7 @@ actions/setup-elixir@v1
 actions/setup-go@v6
 actions/setup-haskell@v1
 actions/setup-java@v5
-actions/setup-node@v6
+actions/setup-node@v7
 actions/setup-python@v6
 actions/setup-ruby@v1
 actions/stale@v10
