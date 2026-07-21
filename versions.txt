@@ -15,7 +15,7 @@ actions/hello-world-docker-action@v2
 actions/hello-world-javascript-action@v1
 actions/javascript-action@v1
 actions/jekyll-build-pages@v1
-actions/labeler@v6
+actions/labeler@v7
 actions/publish-immutable-action@v0
 actions/setup-dotnet@v6
 actions/setup-elixir@v1
