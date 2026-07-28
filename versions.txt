@@ -25,7 +25,7 @@ actions/setup-java@v5
 actions/setup-node@v7
 actions/setup-python@v7
 actions/setup-ruby@v1
-actions/stale@v10
+actions/stale@v11
 actions/upload-artifact@v7
 actions/upload-pages-artifact@v5
 actions/upload-release-asset@v1
