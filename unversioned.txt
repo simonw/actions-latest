@@ -43,6 +43,7 @@ runner-images-PK1
 runner-images-check
 scaleset
 setup-java-benchmarks
+setup-java-deprecation-test
 setup-java-v5.5-tests
 starter-workflows
 toolkit
