@@ -21,7 +21,7 @@ actions/setup-dotnet@v6
 actions/setup-elixir@v1
 actions/setup-go@v7
 actions/setup-haskell@v1
-actions/setup-java@v5
+actions/setup-java@v6
 actions/setup-node@v7
 actions/setup-python@v7
 actions/setup-ruby@v1
