@@ -34,6 +34,7 @@ node-versions
 opensearch-pyd
 partner-runner-images
 publish-action
+publish-immutable-action
 python-versions
 reusable-workflows
 runner
