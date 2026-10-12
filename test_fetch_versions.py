@@ -3,165 +3,127 @@
 Unit tests for fetch_versions.py
 """
 
+import io
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
+from urllib.error import HTTPError, URLError
 
 import fetch_versions
 
 
+def api_response(data):
+    return io.BytesIO(json.dumps(data).encode())
+
+
+class TestFetchPage(unittest.TestCase):
+    def setUp(self):
+        self.url = "https://api.github.com/repos/actions/checkout/tags"
+        self.enterContext(patch.dict(os.environ, {"GITHUB_TOKEN": "", "GH_TOKEN": ""}))
+
+    @patch("fetch_versions.urlopen")
+    def test_authentication(self, mock_open):
+        for env, expected_token in [
+            ({"GITHUB_TOKEN": "github-token", "GH_TOKEN": "gh-token"}, "github-token"),
+            ({"GITHUB_TOKEN": "", "GH_TOKEN": "gh-token"}, "gh-token"),
+            ({"GITHUB_TOKEN": "", "GH_TOKEN": ""}, None),
+        ]:
+            with self.subTest(env=env), patch.dict(os.environ, env):
+                mock_open.return_value = api_response([{"name": "v1"}])
+                self.assertEqual(fetch_versions.fetch_page(self.url), [{"name": "v1"}])
+                request = mock_open.call_args.args[0]
+                self.assertEqual(request.full_url, self.url)
+                self.assertEqual(request.get_header("Accept"), "application/vnd.github+json")
+                self.assertEqual(
+                    request.get_header("Authorization"),
+                    f"Bearer {expected_token}" if expected_token else None,
+                )
+
+    @patch("fetch_versions.urlopen")
+    def test_http_and_network_errors_propagate(self, mock_open):
+        errors = [HTTPError(self.url, status, "API failure", {}, None) for status in (403, 429, 500)]
+        for error in errors:
+            self.addCleanup(error.close)
+        errors.extend([URLError("Connection failed"), TimeoutError("Timed out")])
+        for error in errors:
+            with self.subTest(error=error):
+                mock_open.side_effect = error
+                with self.assertRaises(type(error)):
+                    fetch_versions.fetch_page(self.url)
+
+    @patch("fetch_versions.urlopen")
+    def test_unexpected_response_is_an_error(self, mock_open):
+        for data in [{"message": "API rate limit exceeded"}, None, "oops", [{}], [{"name": None}], ["v1"]]:
+            with self.subTest(data=data):
+                mock_open.return_value = api_response(data)
+                with self.assertRaises(ValueError):
+                    fetch_versions.fetch_page(self.url)
+
+    @patch("fetch_versions.urlopen")
+    def test_invalid_json_is_an_error(self, mock_open):
+        mock_open.return_value = io.BytesIO(b"<html>Service unavailable</html>")
+        with self.assertRaises(ValueError):
+            fetch_versions.fetch_page(self.url)
+
+
 class TestFetchRepos(unittest.TestCase):
-    """Tests for the fetch_repos function."""
+    @patch("fetch_versions.urlopen")
+    def test_fetch_repos_single_page(self, mock_open):
+        repos = [{"name": "setup-python"}, {"name": "setup-node"}]
+        mock_open.return_value = api_response(repos)
+        self.assertEqual(fetch_versions.fetch_repos("actions"), repos)
 
-    @patch("fetch_versions.subprocess.run")
-    def test_fetch_repos_single_page(self, mock_run):
-        """Test fetching repos when all fit on one page."""
-        mock_repos = [
-            {"name": "setup-python", "clone_url": "https://github.com/actions/setup-python.git"},
-            {"name": "setup-node", "clone_url": "https://github.com/actions/setup-node.git"},
-        ]
-
-        mock_run.return_value = MagicMock(
-            stdout=json.dumps(mock_repos),
-            returncode=0,
+    @patch("fetch_versions.urlopen")
+    def test_fetch_repos_multiple_pages(self, mock_open):
+        first_page = [{"name": f"repo-{i}"} for i in range(100)]
+        second_page = [{"name": "repo-100"}]
+        mock_open.side_effect = [api_response(first_page), api_response(second_page)]
+        self.assertEqual(fetch_versions.fetch_repos("actions"), first_page + second_page)
+        self.assertEqual(
+            [call.args[0].full_url for call in mock_open.call_args_list],
+            [f"https://api.github.com/orgs/actions/repos?per_page=100&page={page}" for page in (1, 2)],
         )
 
-        repos = fetch_versions.fetch_repos("actions")
-
-        self.assertEqual(len(repos), 2)
-        self.assertEqual(repos[0]["name"], "setup-python")
-        self.assertEqual(repos[1]["name"], "setup-node")
-
-    @patch("fetch_versions.subprocess.run")
-    def test_fetch_repos_multiple_pages(self, mock_run):
-        """Test fetching repos when pagination is needed."""
-        # First page - full page of 100 repos
-        first_page = [{"name": f"repo-{i}", "clone_url": f"https://github.com/actions/repo-{i}.git"} for i in range(100)]
-        # Second page - partial page (last page)
-        second_page = [{"name": "repo-100", "clone_url": "https://github.com/actions/repo-100.git"}]
-
-        mock_run.side_effect = [
-            MagicMock(stdout=json.dumps(first_page), returncode=0),
-            MagicMock(stdout=json.dumps(second_page), returncode=0),
-        ]
-
-        repos = fetch_versions.fetch_repos("actions")
-
-        self.assertEqual(len(repos), 101)
-        self.assertEqual(mock_run.call_count, 2)
-
-    @patch("fetch_versions.subprocess.run")
-    def test_fetch_repos_empty(self, mock_run):
-        """Test fetching repos when org has no repos."""
-        mock_run.return_value = MagicMock(
-            stdout=json.dumps([]),
-            returncode=0,
-        )
-
-        repos = fetch_versions.fetch_repos("empty-org")
-
-        self.assertEqual(len(repos), 0)
+    @patch("fetch_versions.urlopen")
+    def test_fetch_repos_empty(self, mock_open):
+        mock_open.return_value = api_response([])
+        self.assertEqual(fetch_versions.fetch_repos("empty-org"), [])
 
 
 class TestFetchTags(unittest.TestCase):
-    """Tests for the fetch_tags function."""
+    @patch("fetch_versions.urlopen")
+    def test_fetch_tags_single_page(self, mock_open):
+        mock_open.return_value = api_response([{"name": tag} for tag in ("v1", "v2", "v3")])
+        self.assertEqual(fetch_versions.fetch_tags("actions", "setup-python"), ["v1", "v2", "v3"])
 
-    @patch("fetch_versions.subprocess.run")
-    def test_fetch_tags_single_page(self, mock_run):
-        """Test fetching tags when all fit on one page."""
-        mock_tags = [
-            {"name": "v1"},
-            {"name": "v2"},
-            {"name": "v3"},
+    @patch("fetch_versions.urlopen")
+    def test_fetch_tags_multiple_pages(self, mock_open):
+        mock_open.side_effect = [
+            api_response([{"name": f"v{i}"} for i in range(100)]),
+            api_response([{"name": "v100"}]),
         ]
-
-        mock_run.return_value = MagicMock(
-            stdout=json.dumps(mock_tags),
-            returncode=0,
+        self.assertEqual(fetch_versions.fetch_tags("actions", "big-repo"), [f"v{i}" for i in range(101)])
+        self.assertEqual(
+            [call.args[0].full_url for call in mock_open.call_args_list],
+            [f"https://api.github.com/repos/actions/big-repo/tags?per_page=100&page={page}" for page in (1, 2)],
         )
 
-        tags = fetch_versions.fetch_tags("actions", "setup-python")
-
-        self.assertEqual(len(tags), 3)
-        self.assertEqual(tags, ["v1", "v2", "v3"])
-
-    @patch("fetch_versions.subprocess.run")
-    def test_fetch_tags_multiple_pages(self, mock_run):
-        """Test fetching tags when pagination is needed."""
-        # First page - full page of 100 tags
-        first_page = [{"name": f"v{i}"} for i in range(100)]
-        # Second page - partial page (last page)
-        second_page = [{"name": "v100"}]
-
-        mock_run.side_effect = [
-            MagicMock(stdout=json.dumps(first_page), returncode=0),
-            MagicMock(stdout=json.dumps(second_page), returncode=0),
-        ]
-
-        tags = fetch_versions.fetch_tags("actions", "big-repo")
-
-        self.assertEqual(len(tags), 101)
-        self.assertEqual(mock_run.call_count, 2)
-
-    @patch("fetch_versions.subprocess.run")
-    def test_fetch_tags_empty(self, mock_run):
-        """Test fetching tags when repo has no tags."""
-        mock_run.return_value = MagicMock(
-            stdout=json.dumps([]),
-            returncode=0,
-        )
-
-        tags = fetch_versions.fetch_tags("actions", "no-tags-repo")
-
-        self.assertEqual(len(tags), 0)
-
-    @patch("fetch_versions.subprocess.run")
-    def test_fetch_tags_api_error(self, mock_run):
-        """Test handling API error response."""
-        mock_run.return_value = MagicMock(
-            stdout=json.dumps({"message": "API rate limit exceeded"}),
-            returncode=0,
-        )
-
-        tags = fetch_versions.fetch_tags("actions", "some-repo")
-
-        self.assertEqual(len(tags), 0)
+    @patch("fetch_versions.urlopen")
+    def test_fetch_tags_empty(self, mock_open):
+        mock_open.return_value = api_response([])
+        self.assertEqual(fetch_versions.fetch_tags("actions", "no-tags-repo"), [])
 
 
-class TestUnversionedCache(unittest.TestCase):
-    """Tests for the unversioned repos caching functions."""
-
-    def test_load_unversioned_file_not_exists(self):
-        """Test loading when unversioned.txt doesn't exist."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch.object(fetch_versions, "UNVERSIONED_FILE", Path(tmpdir) / "unversioned.txt"):
-                result = fetch_versions.load_unversioned()
-                self.assertEqual(result, set())
-
-    def test_load_unversioned_with_repos(self):
-        """Test loading unversioned repos from file."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            unversioned_file = Path(tmpdir) / "unversioned.txt"
-            unversioned_file.write_text("repo1\nrepo2\nrepo3\n")
-
-            with patch.object(fetch_versions, "UNVERSIONED_FILE", unversioned_file):
-                result = fetch_versions.load_unversioned()
-                self.assertEqual(result, {"repo1", "repo2", "repo3"})
-
+class TestUnversionedReport(unittest.TestCase):
     def test_save_unversioned(self):
-        """Test saving unversioned repos to file."""
         with tempfile.TemporaryDirectory() as tmpdir:
             unversioned_file = Path(tmpdir) / "unversioned.txt"
-
             with patch.object(fetch_versions, "UNVERSIONED_FILE", unversioned_file):
                 fetch_versions.save_unversioned({"zebra", "alpha", "mango"})
-
-                content = unversioned_file.read_text()
-                lines = content.strip().split("\n")
-                # Should be sorted alphabetically
-                self.assertEqual(lines, ["alpha", "mango", "zebra"])
+            self.assertEqual(unversioned_file.read_text(), "alpha\nmango\nzebra\n")
 
 
 class TestUpdateReadme(unittest.TestCase):
@@ -256,155 +218,89 @@ class TestGetLatestVersionTag(unittest.TestCase):
 
 
 class TestMain(unittest.TestCase):
-    """Integration tests for the main function."""
+    """Exercise real fetching and file writes with only HTTP responses mocked."""
 
-    @patch("fetch_versions.save_unversioned")
-    @patch("fetch_versions.load_unversioned")
-    @patch("fetch_versions.VERSIONS_FILE")
-    @patch("fetch_versions.get_latest_version_tag")
-    @patch("fetch_versions.fetch_tags")
-    @patch("fetch_versions.fetch_repos")
-    def test_main_integration(
-        self,
-        mock_fetch_repos,
-        mock_fetch_tags,
-        mock_get_tag,
-        mock_versions_file,
-        mock_load_unversioned,
-        mock_save_unversioned,
-    ):
-        """Test the main function with mocked dependencies."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmppath = Path(tmpdir)
-            versions_file = tmppath / "versions.txt"
-            readme_file = tmppath / "README.md"
-            readme_file.write_text(
-                f"{fetch_versions.README_START_MARKER}\n"
-                f"{fetch_versions.README_END_MARKER}\n"
-            )
-            mock_versions_file.__str__ = lambda self: str(versions_file)
-            mock_versions_file.__fspath__ = lambda self: str(versions_file)
+    def setUp(self):
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.versions = directory / "versions.txt"
+        self.readme = directory / "README.md"
+        self.unversioned = directory / "unversioned.txt"
+        self.versions.write_text("actions/setup-python@v5\n")
+        self.readme.write_text(
+            "Intro\n\n<!-- VERSIONS_START -->\n"
+            "## Latest versions\n\n```\nactions/setup-python@v5\n```\n"
+            "<!-- VERSIONS_END -->\n"
+        )
+        # Reproduce a poisoned cache that previously prevented recovery.
+        self.unversioned.write_text("setup-python\nsetup-node\nno-tags-repo\n")
+        for name, path in [
+            ("VERSIONS_FILE", self.versions),
+            ("README_FILE", self.readme),
+            ("UNVERSIONED_FILE", self.unversioned),
+        ]:
+            self.enterContext(patch.object(fetch_versions, name, path))
+        self.enterContext(patch("sys.stdout", new=io.StringIO()))
+        self.before = self.output_contents()
 
-            # No cached unversioned repos
-            mock_load_unversioned.return_value = set()
+    def output_contents(self):
+        return [path.read_bytes() for path in (self.versions, self.readme, self.unversioned)]
 
-            # Mock fetch_repos to return test data
-            mock_fetch_repos.return_value = [
-                {"name": "setup-python"},
-                {"name": "setup-node"},
-                {"name": "no-tags-repo"},
-            ]
+    @patch("fetch_versions.urlopen")
+    def test_main_recovers_cached_repos_and_updates_all_outputs(self, mock_open):
+        mock_open.side_effect = [
+            api_response([{"name": "setup-python"}, {"name": "setup-node"}, {"name": "no-tags-repo"}]),
+            api_response([{"name": "v5"}, {"name": "v6"}]),
+            api_response([{"name": "v4"}]),
+            api_response([]),
+        ]
+        fetch_versions.main()
+        content = "actions/setup-node@v4\nactions/setup-python@v6\n"
+        self.assertEqual(self.versions.read_text(), content)
+        self.assertIn(f"```\n{content}```", self.readme.read_text())
+        self.assertTrue(self.readme.read_text().startswith("Intro\n"))
+        self.assertEqual(self.unversioned.read_text(), "no-tags-repo\n")
+        self.assertEqual(mock_open.call_count, 4)
 
-            # Mock fetch_tags to return tags for each repo
-            def fetch_tags_side_effect(org, repo_name):
-                if repo_name == "setup-python":
-                    return ["v1", "v2", "v5"]
-                elif repo_name == "setup-node":
-                    return ["v1", "v2", "v3", "v4"]
-                else:
-                    return []  # no-tags-repo has no tags
+    @patch("fetch_versions.urlopen")
+    def test_empty_results_preserve_all_outputs(self, mock_open):
+        for pages in [[], [{"name": "checkout"}]]:
+            with self.subTest(repos=pages):
+                mock_open.side_effect = [api_response(pages), api_response([])]
+                with self.assertRaisesRegex(ValueError, "refusing to overwrite"):
+                    fetch_versions.main()
+                self.assertEqual(self.output_contents(), self.before)
 
-            mock_fetch_tags.side_effect = fetch_tags_side_effect
+    @patch("fetch_versions.urlopen")
+    def test_api_failures_preserve_all_outputs(self, mock_open):
+        prefixes = [
+            [],  # Repository listing fails immediately.
+            [[{"name": f"repo-{i}"} for i in range(100)]],  # Second repository page fails.
+            [[{"name": "checkout"}]],  # First tags request fails.
+            [
+                [{"name": "checkout"}, {"name": "setup-python"}],
+                [{"name": "v6"}],
+                [{"name": f"v{i}"} for i in range(100)],
+            ],  # Tags pagination fails after finding usable versions.
+        ]
+        for prefix in prefixes:
+            with self.subTest(prefix=prefix):
+                error = HTTPError("https://api.github.com", 403, "API rate limit exceeded", {}, None)
+                self.addCleanup(error.close)
+                mock_open.side_effect = [api_response(page) for page in prefix] + [error]
+                with self.assertRaises(HTTPError):
+                    fetch_versions.main()
+                self.assertEqual(self.output_contents(), self.before)
 
-            # Mock get_latest_version_tag to return versions for some repos
-            def get_tag_side_effect(tags):
-                if "v5" in tags:
-                    return "v5"
-                elif "v4" in tags:
-                    return "v4"
-                else:
-                    return None
-
-            mock_get_tag.side_effect = get_tag_side_effect
-
-            # Patch open() to write to our temp file
-            original_open = open
-
-            def patched_open(path, *args, **kwargs):
-                if "versions.txt" in str(path):
-                    return original_open(versions_file, *args, **kwargs)
-                return original_open(path, *args, **kwargs)
-
-            with (
-                patch("builtins.open", side_effect=patched_open),
-                patch.object(fetch_versions, "README_FILE", readme_file),
-            ):
-                fetch_versions.main()
-
-            # Verify the versions file was written correctly
-            content = versions_file.read_text()
-            lines = content.strip().split("\n")
-
-            self.assertEqual(len(lines), 2)
-            self.assertIn("actions/setup-node@v4", lines)
-            self.assertIn("actions/setup-python@v5", lines)
-
-            # Verify alphabetical ordering (setup-node before setup-python)
-            self.assertEqual(lines[0], "actions/setup-node@v4")
-            self.assertEqual(lines[1], "actions/setup-python@v5")
-
-            # Verify unversioned repos were saved
-            mock_save_unversioned.assert_called_once()
-            saved_unversioned = mock_save_unversioned.call_args[0][0]
-            self.assertIn("no-tags-repo", saved_unversioned)
-
-    @patch("fetch_versions.save_unversioned")
-    @patch("fetch_versions.load_unversioned")
-    @patch("fetch_versions.VERSIONS_FILE")
-    @patch("fetch_versions.get_latest_version_tag")
-    @patch("fetch_versions.fetch_tags")
-    @patch("fetch_versions.fetch_repos")
-    def test_main_skips_cached_unversioned(
-        self,
-        mock_fetch_repos,
-        mock_fetch_tags,
-        mock_get_tag,
-        mock_versions_file,
-        mock_load_unversioned,
-        mock_save_unversioned,
-    ):
-        """Test that cached unversioned repos are skipped."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmppath = Path(tmpdir)
-            versions_file = tmppath / "versions.txt"
-            readme_file = tmppath / "README.md"
-            readme_file.write_text(
-                f"{fetch_versions.README_START_MARKER}\n"
-                f"{fetch_versions.README_END_MARKER}\n"
-            )
-            mock_versions_file.__str__ = lambda self: str(versions_file)
-            mock_versions_file.__fspath__ = lambda self: str(versions_file)
-
-            # Cached unversioned repos
-            mock_load_unversioned.return_value = {"cached-no-tags"}
-
-            # Mock fetch_repos to return test data including cached repo
-            mock_fetch_repos.return_value = [
-                {"name": "setup-python"},
-                {"name": "cached-no-tags"},
-            ]
-
-            # Mock fetch_tags - should only be called for setup-python
-            mock_fetch_tags.return_value = ["v1", "v5"]
-            mock_get_tag.return_value = "v5"
-
-            # Patch open() to write to our temp file
-            original_open = open
-
-            def patched_open(path, *args, **kwargs):
-                if "versions.txt" in str(path):
-                    return original_open(versions_file, *args, **kwargs)
-                return original_open(path, *args, **kwargs)
-
-            with (
-                patch("builtins.open", side_effect=patched_open),
-                patch.object(fetch_versions, "README_FILE", readme_file),
-            ):
-                fetch_versions.main()
-
-            # fetch_tags should only be called once (for setup-python, not cached-no-tags)
-            self.assertEqual(mock_fetch_tags.call_count, 1)
-            mock_fetch_tags.assert_called_with("actions", "setup-python")
+    @patch("fetch_versions.urlopen")
+    def test_malformed_response_preserves_all_outputs(self, mock_open):
+        mock_open.side_effect = [
+            api_response([{"name": "checkout"}, {"name": "setup-python"}]),
+            api_response([{"name": "v6"}]),
+            api_response({"message": "API rate limit exceeded"}),
+        ]
+        with self.assertRaisesRegex(ValueError, "API rate limit exceeded"):
+            fetch_versions.main()
+        self.assertEqual(self.output_contents(), self.before)
 
 
 class TestVersionPatternMatching(unittest.TestCase):

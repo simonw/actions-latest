@@ -5,15 +5,14 @@ and generate a versions.txt file with the latest vINTEGER tags.
 
 No git cloning required - uses GitHub REST API only.
 
-Repos known to have no vINTEGER tags are cached in unversioned.txt to skip
-API calls on future runs.
+Repos with no vINTEGER tags are recorded in unversioned.txt and checked again on every run.
 """
 
 import json
+import os
 import re
-import subprocess
-import sys
 from pathlib import Path
+from urllib.request import Request, urlopen
 
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -26,13 +25,6 @@ README_START_MARKER = "<!-- VERSIONS_START -->"
 README_END_MARKER = "<!-- VERSIONS_END -->"
 ORG_NAME = "actions"
 GITHUB_API_URL = "https://api.github.com"
-
-
-def load_unversioned() -> set[str]:
-    """Load the set of repos known to have no vINTEGER tags."""
-    if not UNVERSIONED_FILE.exists():
-        return set()
-    return set(line.strip() for line in UNVERSIONED_FILE.read_text().splitlines() if line.strip())
 
 
 def save_unversioned(repos: set[str]) -> None:
@@ -74,22 +66,32 @@ def update_readme(versions_content: str) -> None:
     print(f"Updated {README_FILE} with latest versions")
 
 
+def fetch_page(url: str) -> list[dict]:
+    """Fetch an API page, raising on HTTP errors or unexpected responses."""
+    headers = {"Accept": "application/vnd.github+json"}
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = Request(url, headers=headers)
+    with urlopen(request, timeout=30) as response:
+        data = json.load(response)
+    if not isinstance(data, list):
+        raise ValueError(f"Expected a list from {url}, got: {data!r}")
+    for item in data:
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+            raise ValueError(f"Invalid item from {url}: {item!r}")
+    return data
+
+
 def fetch_repos(org: str) -> list[dict]:
-    """Fetch all repos for an organization using curl."""
+    """Fetch all repos for an organization using the GitHub API."""
     repos = []
     page = 1
     per_page = 100
 
     while True:
         url = f"{GITHUB_API_URL}/orgs/{org}/repos?per_page={per_page}&page={page}"
-        result = subprocess.run(
-            ["curl", "-s", "-H", "Accept: application/vnd.github+json", url],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-
-        page_repos = json.loads(result.stdout)
+        page_repos = fetch_page(url)
 
         if not page_repos:
             break
@@ -112,19 +114,7 @@ def fetch_tags(org: str, repo_name: str) -> list[str]:
 
     while True:
         url = f"{GITHUB_API_URL}/repos/{org}/{repo_name}/tags?per_page={per_page}&page={page}"
-        result = subprocess.run(
-            ["curl", "-s", "-H", "Accept: application/vnd.github+json", url],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-
-        page_tags = json.loads(result.stdout)
-
-        # Handle error responses (e.g., rate limiting)
-        if isinstance(page_tags, dict) and "message" in page_tags:
-            print(f"  API error for {repo_name}: {page_tags['message']}", file=sys.stderr)
-            break
+        page_tags = fetch_page(url)
 
         if not page_tags:
             break
@@ -160,11 +150,6 @@ def get_latest_version_tag(tags: list[str]) -> str | None:
 
 def main():
     """Main function to fetch repos, get tags via API, and generate versions.txt."""
-    # Load cached unversioned repos
-    unversioned = load_unversioned()
-    if unversioned:
-        print(f"Loaded {len(unversioned)} known unversioned repos from cache")
-
     print(f"Fetching repos for {ORG_NAME}...")
     repos = fetch_repos(ORG_NAME)
     print(f"Found {len(repos)} repos")
@@ -174,12 +159,6 @@ def main():
 
     for repo in repos:
         repo_name = repo["name"]
-
-        # Skip repos known to have no vINTEGER tags
-        if repo_name in unversioned:
-            print(f"Skipping {repo_name} (cached as unversioned)")
-            new_unversioned.add(repo_name)
-            continue
 
         print(f"Fetching tags for {repo_name}...", end=" ")
         tags = fetch_tags(ORG_NAME, repo_name)
@@ -191,6 +170,10 @@ def main():
         else:
             print("no vINTEGER tag")
             new_unversioned.add(repo_name)
+
+    # Preserve all existing output files if the API yields no usable versions.
+    if not versions:
+        raise ValueError("No version tags found; refusing to overwrite existing files")
 
     # Sort alphabetically by repo name
     versions.sort(key=lambda x: x[0].lower())
@@ -211,7 +194,7 @@ def main():
     save_unversioned(new_unversioned)
 
     print(f"\nWrote {len(versions)} versions to {VERSIONS_FILE}")
-    print(f"Cached {len(new_unversioned)} unversioned repos to {UNVERSIONED_FILE}")
+    print(f"Recorded {len(new_unversioned)} unversioned repos to {UNVERSIONED_FILE}")
 
 
 if __name__ == "__main__":
